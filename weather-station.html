@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Weather Station</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;padding:14px;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+background:linear-gradient(180deg,#cfe8ff 0,#f2f9ff 280px,#fff 100%);color:#12263f;min-height:100vh}
+.w{max-width:560px;margin:0 auto}
+.hd{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+h1{margin:4px 0 0;font-size:1.8rem;color:#0b5fd6;letter-spacing:-.5px}
+.dt{text-align:right;color:#0b5fd6;font-weight:700;font-size:1rem;line-height:1.3;margin-top:6px;white-space:nowrap}
+.sub{color:#4d6a8a;font-size:.92rem;margin:2px 0 14px}
+.c{background:#fff;border-radius:18px;padding:16px;margin-bottom:14px;box-shadow:0 2px 10px rgba(20,70,140,.13)}
+h2{margin:0 0 10px;font-size:.78rem;letter-spacing:.14em;text-transform:uppercase;color:#0b5fd6}
+.big{font-size:3.3rem;font-weight:700;line-height:1}
+.big small{font-size:1.1rem;color:#6b84a3;font-weight:500}
+.g{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.t{background:#eef6ff;border-radius:12px;padding:10px 12px}
+.t b{display:block;font-size:1.15rem}
+.t span{font-size:.72rem;color:#5a7595;text-transform:uppercase;letter-spacing:.06em}
+.n{color:#7a8ea6;font-size:.82rem}
+.e{color:#d23b3b;font-size:.9rem;margin:0}
+.warn{background:#fff4e0;color:#8a5200;border-radius:12px;padding:10px 12px;font-size:.88rem;margin-bottom:14px}
+.ok{color:#08877a;font-size:.82rem;margin:0 0 14px}
+.tabs{display:flex;gap:8px;margin-bottom:12px}
+.tabs button{flex:1;padding:9px;border:0;border-radius:10px;background:#e3eefb;color:#0b5fd6;font-weight:700;font-size:.9rem}
+.tabs button.on{background:#0b5fd6;color:#fff}
+svg{width:100%;height:auto;display:block}
+.ft{text-align:center;color:#8a9bb0;font-size:.72rem;margin:18px 0 6px}
+</style>
+</head>
+<body>
+<div class="w">
+
+<div class="hd">
+  <h1>Weather Station</h1>
+  <div class="dt"><span id="d">&nbsp;</span><br><span id="c">&nbsp;</span></div>
+</div>
+<p class="sub">Selden, NY</p>
+
+<div id="status"></div>
+
+<div class="c" id="now"><h2>Right Now</h2><p class="n">Loading&hellip;</p></div>
+
+<div class="tabs">
+  <button id="b24" class="on">Last 24 hours</button>
+  <button id="b7">Last 7 days</button>
+</div>
+
+<div class="c"><h2>Indoor Temp (&deg;F)</h2><div id="ch1"></div></div>
+<div class="c"><h2>Indoor Humidity (%)</h2><div id="ch2"></div></div>
+<div class="c"><h2>Pressure (inHg)</h2><div id="ch3"></div></div>
+<div class="c"><h2>Outdoor Temp (&deg;F)</h2><div id="ch4"></div></div>
+
+<p class="ft">Readings from the Weather Station at home &middot; updated every 15 min &middot; this page refreshes every 5 min</p>
+</div>
+
+<script>
+// ==== EDIT THESE TWO LINES =====================================================
+const CHANNEL_ID = "3590624";                // your ThingSpeak channel ID
+const READ_KEY   = "";                        // leave empty if the channel is shared publicly
+// ===============================================================================
+
+const TZ = "America/New_York";
+const DEMO = location.search.indexOf("demo") >= 0;   // add ?demo to the web address to preview with sample data
+const STALE_MIN = 40;                                // warn if no reading for this long
+let results = 96;                                    // 96 readings = 24 hours (one every 15 min)
+
+const $ = id => document.getElementById(id);
+const num = v => { const x = parseFloat(v); return isNaN(x) ? null : x; };
+
+// ---- clock (top right) ----
+function tick() {
+  const n = new Date();
+  $("d").textContent = n.toLocaleDateString("en-US", {weekday:"short", month:"short", day:"numeric", timeZone:TZ}).replace(",", "");
+  $("c").textContent = n.toLocaleTimeString("en-US", {hour:"numeric", minute:"2-digit", timeZoneName:"short", timeZone:TZ});
+}
+tick(); setInterval(tick, 1000);
+
+// ---- data ----
+function demoFeeds(n) {
+  const out = [], now = Date.now();
+  for (let i = n - 1; i >= 0; i--) {
+    const t = now - i * 900000, h = i / 4;
+    out.push({created_at: new Date(t).toISOString(),
+      field1: (72 + 2*Math.sin(h/4)).toFixed(1), field2: (45 + 8*Math.sin(h/6)).toFixed(1),
+      field3: (29.9 - 0.15*Math.sin(h/20)).toFixed(3), field4: (48 + 9*Math.sin(h/5)).toFixed(1)});
+  }
+  return out;
+}
+
+async function getFeeds() {
+  if (DEMO) return demoFeeds(results);
+  if (CHANNEL_ID.indexOf("PASTE") === 0) throw new Error("Open index.html and put your ThingSpeak Channel ID on the CHANNEL_ID line.");
+  const url = "https://api.thingspeak.com/channels/" + CHANNEL_ID + "/feeds.json?results=" + results +
+              (READ_KEY ? "&api_key=" + READ_KEY : "");
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("ThingSpeak said " + r.status + ". If the channel is private, share it publicly or add the Read API Key.");
+  const j = await r.json();
+  return j.feeds || [];
+}
+
+const series = (feeds, k) => feeds.map(f => ({t: new Date(f.created_at).getTime(), v: num(f["field" + k])})).filter(p => p.v !== null);
+
+// ---- right-now card ----
+function ago(ms) {
+  const m = Math.round(ms / 60000);
+  if (m < 1) return "just now";
+  if (m < 90) return m + " min ago";
+  const h = Math.round(m / 60);
+  return h < 48 ? h + " hours ago" : Math.round(h / 24) + " days ago";
+}
+
+function trend(s3) {
+  // same idea as the Pico: change in pressure over the last ~3 hours (12 readings)
+  if (s3.length < 2) return ["&hellip;", "Building history"];
+  const last = s3[s3.length - 1], ref = s3[Math.max(0, s3.length - 12)];
+  const d = last.v - ref.v, a = Math.abs(d);
+  if (a >= 0.06) return d > 0 ? ["&#8593;&#8593;", "Rising Rapidly"] : ["&#8595;&#8595;", "Falling Rapidly"];
+  if (a >= 0.02) return d > 0 ? ["&#8593;", "Rising"] : ["&#8595;", "Falling"];
+  return ["&#8594;", "Steady"];
+}
+
+function tile(label, value) { return '<div class="t"><span>' + label + '</span><b>' + value + '</b></div>'; }
+const toC = f => ((f - 32) * 5 / 9).toFixed(1);
+
+function renderNow(S) {
+  const last = k => S[k].length ? S[k][S[k].length - 1] : null;
+  const t = last(1), h = last(2), p = last(3), o = last(4);
+  if (!t) { $("now").innerHTML = '<h2>Right Now</h2><p class="e">No readings in the channel yet.</p>'; return; }
+  const tr = trend(S[3]);
+  let html = '<h2>Right Now</h2><div class="big">' + t.v.toFixed(1) + '&deg;<small>F &nbsp;&middot;&nbsp; ' + toC(t.v) + '&deg;C</small></div>' +
+             '<div class="n" style="margin:6px 0 14px">Indoor Temp</div><div class="g">';
+  html += tile("Indoor Humidity", h ? h.v.toFixed(1) + "%" : "--");
+  html += tile("Pressure", p ? p.v.toFixed(2) + " inHg" : "--");
+  html += tile("Trend (3 hr)", tr[0] + " " + tr[1]);
+  html += tile("Outdoor Temp", o ? o.v.toFixed(1) + "&deg;F &middot; " + toC(o.v) + "&deg;C" : "No sensor");
+  html += "</div>";
+  $("now").innerHTML = html;
+
+  const age = Date.now() - t.t;
+  const when = new Date(t.t).toLocaleString("en-US", {weekday:"short", hour:"numeric", minute:"2-digit", timeZone:TZ});
+  $("status").innerHTML = age > STALE_MIN * 60000
+    ? '<div class="warn"><b>Last reading ' + ago(age) + '</b> (' + when + '). The station may be offline or out of WiFi range.</div>'
+    : '<p class="ok">&#9679; Updated ' + ago(age) + ' &middot; ' + when + '</p>';
+}
+
+// ---- charts (plain SVG, no libraries) ----
+function chart(id, s, dec, minSpan) {
+  const el = $(id);
+  if (s.length < 2) { el.innerHTML = '<p class="n">Not enough data yet.</p>'; return; }
+  const W = 320, H = 130, L = 8, R = 8, T = 10, B = 22, pw = W - L - R, ph = H - T - B;
+  const t0 = s[0].t, t1 = s[s.length - 1].t;
+  let lo = Math.min.apply(null, s.map(p => p.v)), hi = Math.max.apply(null, s.map(p => p.v));
+  if (hi - lo < minSpan) { const m = (hi + lo) / 2; lo = m - minSpan / 2; hi = m + minSpan / 2; }
+  const pad = (hi - lo) * 0.2; lo -= pad; hi += pad;
+  const cx = v => Math.max(L + 14, Math.min(W - R - 14, v));
+  const x = t => L + (t - t0) / ((t1 - t0) || 1) * pw;
+  const y = v => T + (1 - (v - lo) / (hi - lo)) * ph;
+  let d = "", prev = null;
+  s.forEach(p => {
+    d += (prev === null || p.t - prev > 45 * 60000 ? "M" : "L") + x(p.t).toFixed(1) + " " + y(p.v).toFixed(1) + " ";
+    prev = p.t;
+  });
+  const area = d + "L" + x(t1).toFixed(1) + " " + (T + ph) + " L" + x(t0).toFixed(1) + " " + (T + ph) + " Z";
+  const mn = s.reduce((a, b) => b.v < a.v ? b : a), mx = s.reduce((a, b) => b.v > a.v ? b : a);
+  const fmt = t => new Date(t).toLocaleString("en-US", results > 96 ? {weekday:"short", hour:"numeric", timeZone:TZ} : {hour:"numeric", minute:"2-digit", timeZone:TZ});
+  const lastp = s[s.length - 1];
+  el.innerHTML =
+    '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img">' +
+    '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + (T + ph) + '" y2="' + (T + ph) + '" stroke="#e3eefb"/>' +
+    (area.indexOf("M", 1) < 0 ? '<path d="' + area + '" fill="#0b5fd6" opacity=".10"/>' : '') +
+    '<path d="' + d + '" fill="none" stroke="#0b5fd6" stroke-width="2" stroke-linejoin="round"/>' +
+    '<circle cx="' + x(lastp.t).toFixed(1) + '" cy="' + y(lastp.v).toFixed(1) + '" r="3.5" fill="#0b5fd6"/>' +
+    '<text x="' + cx(x(mx.t)).toFixed(1) + '" y="' + (y(mx.v) - 4).toFixed(1) + '" font-size="9" fill="#c26d00" text-anchor="middle">' + mx.v.toFixed(dec) + '</text>' +
+    '<text x="' + cx(x(mn.t)).toFixed(1) + '" y="' + (y(mn.v) + 12).toFixed(1) + '" font-size="9" fill="#08877a" text-anchor="middle">' + mn.v.toFixed(dec) + '</text>' +
+    '<text x="' + L + '" y="' + (H - 6) + '" font-size="9" fill="#8a9bb0">' + fmt(t0) + '</text>' +
+    '<text x="' + (W - R) + '" y="' + (H - 6) + '" font-size="9" fill="#8a9bb0" text-anchor="end">' + fmt(t1) + '</text>' +
+    '</svg>';
+}
+
+// ---- load + refresh ----
+async function load() {
+  try {
+    const feeds = await getFeeds();
+    const S = {1: series(feeds, 1), 2: series(feeds, 2), 3: series(feeds, 3), 4: series(feeds, 4)};
+    renderNow(S);
+    chart("ch1", S[1], 1, 4);
+    chart("ch2", S[2], 1, 10);
+    chart("ch3", S[3], 2, 0.1);
+    chart("ch4", S[4], 1, 4);
+  } catch (e) {
+    $("now").innerHTML = '<h2>Right Now</h2><p class="e">' + e.message + '</p>';
+  }
+}
+
+function setRange(n) {
+  results = n;
+  $("b24").className = n === 96 ? "on" : "";
+  $("b7").className = n === 672 ? "on" : "";
+  load();
+}
+$("b24").onclick = () => setRange(96);
+$("b7").onclick = () => setRange(672);
+
+load();
+setInterval(load, 300000);
+</script>
+</body>
+</html>
